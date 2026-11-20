@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VC Inventory</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <style>
 :root{--navy:#1f3864;--bg:#f4f6fa;--card:#fff;--line:#d9dee8;--txt:#1b1f27;--mut:#5f6b7a}
 @media(prefers-color-scheme:dark){:root{--bg:#14181f;--card:#1d232d;--line:#333c4a;--txt:#e8ecf2;--mut:#9aa6b6}}
@@ -32,7 +33,8 @@ tr.nw td{background:rgba(76,175,80,.14)}tr.neg td.c{color:#c62828;font-weight:bo
 <header>
   <h1>VC INVENTORY &nbsp;<small style="color:#c9d6ee">DF + India | Stock In / RTV IN / Stock Out</small></h1>
   <button onclick="$('file').click()">Import Excel (base)</button>
-  <button onclick="exportXlsx()">Export Excel</button>
+  <label style="color:#c9d6ee;flex-direction:row;align-items:center;gap:6px">Export for <select id="sel"></select></label>
+  <button id="xbtn" onclick="exportXlsx()">Export Excel</button>
   <button onclick="resetAll()">Reset</button>
   <small id="cloud" style="color:#c9d6ee">Local</small>
   <input id="file" type="file" accept=".xlsx,.xls" class="hide">
@@ -42,6 +44,7 @@ tr.nw td{background:rgba(76,175,80,.14)}tr.neg td.c{color:#c62828;font-weight:bo
   <div class="card row">
     <label>From Date<input type="date" id="from"></label>
     <label>To Date<input type="date" id="to"></label>
+    <label>Daily Format export<select id="dAll"><option value="0">Sirf movement wale bins</option><option value="1">Saare bins (badi file)</option></select></label>
     <small>Period Opening/Closing ke liye. Dono inventory aur Daily tab isi se chalte hain.</small>
   </div>
 
@@ -278,6 +281,31 @@ function daily(){
   }
   $('t-daily').innerHTML=h;
 }
+/* Sep-style: har date ke liye Opening | Stock In | Stock Out | RTV IN | Closing */
+function dailyFormat(inv,from,to,all){
+  const dates=[];
+  for(let d=new Date(from+'T00:00:00'),e=new Date(to+'T00:00:00');d<=e&&dates.length<93;d.setDate(d.getDate()+1))dates.push(d.toLocaleDateString('en-CA'));
+  const sb=skuBrand(),g={};
+  for(const [k,r] of Object.entries(S.base[inv]))g[k]={brand:r.brand,sku:r.sku,bin:r.bin,run:r.qty,d:{}};
+  for(const e of S.log){
+    if(e.inv!==inv)continue;const k=key(e.sku,e.bin);
+    const o=g[k]||(g[k]={brand:sb[String(e.sku).trim().toUpperCase()]||'Unmapped SKU',sku:e.sku.trim(),bin:e.bin.trim(),run:0,d:{}});
+    const x=o.d[e.date]||(o.d[e.date]={in:0,rtv:0,out:0});
+    if(e.type==='Stock In')x.in+=e.qty;else if(e.type==='RTV IN')x.rtv+=e.qty;else x.out+=e.qty;
+  }
+  const h1=['Brand','SKU','Bin','Final Barcode'],h2=[...h1],rows=[];
+  for(const d of dates){h1.push(d,'','','','');h2.push('Opening Stock','Stock In','Stock Out','RTV IN','Closing Stock')}
+  for(const o of Object.values(g)){
+    let run=o.run;
+    for(const d in o.d)if(d<from){const x=o.d[d];run+=x.in+x.rtv-x.out}
+    if(!all&&!Object.keys(o.d).some(d=>d>=from&&d<=to))continue;
+    const row=[o.brand,o.sku,o.bin,o.sku+' '+o.bin];
+    for(const d of dates){const x=o.d[d]||{in:0,rtv:0,out:0},open=run,close=open+x.in+x.rtv-x.out;row.push(open,x.in,x.out,x.rtv,close);run=close}
+    rows.push(row);
+  }
+  rows.sort((a,b)=>(a[0]+a[1]+a[2]).localeCompare(b[0]+b[1]+b[2]));
+  return{aoa:[h1,h2,...rows],merges:dates.map((_,i)=>({s:{r:0,c:4+i*5},e:{r:0,c:8+i*5}}))};
+}
 function ledger(inv,from,to){
   const sb=skuBrand(),g={},rows=[];
   for(const e of S.log){
@@ -298,7 +326,7 @@ function ledger(inv,from,to){
 function ledgerTab(){
   const inv=q.ledInv||INV[1],s=(q.led||'').toLowerCase();
   const rows=ledger(inv,$('from').value,$('to').value).filter(r=>!s||(r.sku+' '+r.bin+' '+r.brand).toLowerCase().includes(s));
-  $('t-led').innerHTML=`<div class="card"><div class="row"><label>Inventory<select onchange="q.ledInv=this.value;ledgerTab()">${INV.map(x=>`<option ${x===inv?'selected':''}>${x}</option>`).join('')}</select></label>
+  $('t-led').innerHTML=`<div class="card"><div class="row"><label>Inventory<select onchange="q.ledInv=this.value;$('sel').value=this.value;ledgerTab()">${INV.map(x=>`<option ${x===inv?'selected':''}>${x}</option>`).join('')}</select></label>
   <label>Search SKU / Bin / Brand<input id="s-led" value="${esc(q.led||'')}" oninput="q.led=this.value;ledgerTab()"></label>
   <small>${fmt(rows.length)} rows (sirf jis date par movement hui). Same date ki entries sum hain. Opening = us date se pehle ka closing. Poora data Export Excel mein milta hai.</small></div>
   <div class="tw" style="margin-top:10px"><table><thead><tr><th>Date</th><th>Brand</th><th>SKU</th><th>Bin</th><th>Final Barcode</th><th class="n">Opening</th><th class="n">Stock In</th><th class="n">RTV IN</th><th class="n">Stock Out</th><th class="n">Closing</th></tr></thead><tbody>
@@ -320,7 +348,7 @@ function render(){
   if(tab==='led')ledgerTab();
 }
 function setTab(t){
-  tab=t;for(const [k] of TABS)$('t-'+k).classList.toggle('hide',k!==t);
+  tab=t;if(t==='df')$('sel').value=INV[0];if(t==='in')$('sel').value=INV[1];for(const [k] of TABS)$('t-'+k).classList.toggle('hide',k!==t);
   [...$('tabs').children].forEach((b,i)=>b.classList.toggle('on',TABS[i][0]===t));render();
 }
 const TABS=[['entry','Entry'],['df','DF Inventory'],['in','India Inventory'],['daily','Daily Summary'],['led','Date-wise Ledger']];
@@ -349,19 +377,103 @@ $('file').onchange=async ev=>{
   if(confirm(got.join('\n')+'\n\nEntry log bhi clear karein? (naye mahine ke liye OK dabayein)'))S.log=[];
   save();render();ev.target.value='';
 };
-function exportXlsx(){
-  const wb=XLSX.utils.book_new(),from=$('from').value,to=$('to').value;
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(S.log.map(e=>({Date:e.date,Inventory:e.inv,Type:e.type,SKU:e.sku,Bin:e.bin,Qty:e.qty,'Final Barcode':e.sku+' '+e.bin}))),'Entry');
-  for(const inv of INV)XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(compute(inv,from,to).map(r=>({'From Date':from,'To Date':to,Brand:r.brand,SKU:r.sku,Bin:r.bin,'Final Barcode':r.sku+' '+r.bin,'Base Stock':r.base,'Opening Stock':r.open,'Stock In':r.in,'RTV IN':r.rtv,'Stock Out':r.out,'Closing Stock':r.close,Source:r.nw?'Auto-added':'Master'}))),inv);
-  for(const inv of INV)XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(ledger(inv,from,to).map(r=>({Date:r.date,Brand:r.brand,SKU:r.sku,Bin:r.bin,'Final Barcode':r.sku+' '+r.bin,'Opening Stock':r.open,'Stock In':r.in,'RTV IN':r.rtv,'Stock Out':r.out,'Closing Stock':r.close}))),inv.split(' ')[0]+' Date-wise');
-  XLSX.writeFile(wb,`VC_Inventory_${to}.xlsx`);
+function dailyTotals(inv,from,to){
+  const base=Object.values(S.base[inv]).reduce((a,r)=>a+r.qty,0),L=S.log.filter(e=>e.inv===inv),out=[];
+  let open=base+L.filter(e=>e.date<from).reduce((a,e)=>a+(e.type==='Stock Out'?-e.qty:e.qty),0);
+  for(let d=new Date(from+'T00:00:00'),end=new Date(to+'T00:00:00');d<=end&&out.length<93;d.setDate(d.getDate()+1)){
+    const ds=d.toLocaleDateString('en-CA'),x=L.filter(e=>e.date===ds),f=t=>x.filter(e=>e.type===t).reduce((a,e)=>a+e.qty,0);
+    const i=f('Stock In'),r=f('RTV IN'),o=f('Stock Out'),c=open+i+r-o;out.push({date:ds,open,in:i,rtv:r,out:o,close:c});open=c;
+  }
+  return out;
+}
+/* ---------- professional Excel export (selected inventory only) ---------- */
+function buildWorkbook(inv,from,to,all){
+  const wb=new ExcelJS.Workbook();wb.creator='VC Inventory';
+  const F='Arial',NAVY='FF1F3864',MID='FF2E75B6',LIGHT='FFD9E1F2',GREEN='FFE2EFDA';
+  const thin={style:'thin',color:{argb:'FFBFBFBF'}},bd={top:thin,left:thin,bottom:thin,right:thin};
+  const NUM='#,##0;[Red]-#,##0;"-"',DT='dd-mmm-yyyy',D=s=>new Date(s+'T00:00:00Z'),ISO=/^\d{4}-\d{2}-\d{2}$/;
+  const font=(o={})=>({name:F,size:10,...o}),fill=a=>({type:'pattern',pattern:'solid',fgColor:{argb:a}});
+  const head=(row,bg=NAVY)=>{row.eachCell(c=>{c.font=font({bold:true,color:{argb:'FFFFFFFF'}});c.fill=fill(bg);c.alignment={horizontal:'center',vertical:'middle',wrapText:true};c.border=bd});row.height=28};
+  const sheet=(name,t,widths,view)=>{
+    const ws=wb.addWorksheet(name,{views:[{showGridLines:false,...(view||{})}]});
+    ws.getCell('A1').value=t;ws.getCell('A1').font=font({size:16,bold:true,color:{argb:NAVY}});
+    ws.getCell('A2').value=`${inv}   |   Period: ${from} to ${to}`;ws.getCell('A2').font=font({size:9,italic:true,color:{argb:'FF595959'}});
+    widths.forEach((w,i)=>ws.getColumn(i+1).width=w);return ws;
+  };
+  const put=(ws,n,vals,fmts,bg)=>{const r=ws.getRow(n);vals.forEach((v,i)=>{const c=r.getCell(i+1);c.value=v;c.font=font();c.border=bd;if(fmts[i])c.numFmt=fmts[i];if(bg)c.fill=fill(bg)});return r};
+  const rows=compute(inv,from,to).sort((a,b)=>(a.brand+a.sku+a.bin).localeCompare(b.brand+b.sku+b.bin));
+  const tot=f=>rows.reduce((a,r)=>a+r[f],0),dt=dailyTotals(inv,from,to);
+
+  // 1. Summary
+  let ws=sheet('Summary',`${inv.toUpperCase()}  -  SUMMARY`,[34,16,16,16,16,16]);
+  ws.getRow(4).values=['Metric','Value'];head(ws.getRow(4));
+  [['Opening Stock',tot('open')],['Stock In',tot('in')],['RTV IN',tot('rtv')],['Stock Out',tot('out')],['Closing Stock',tot('close')],
+   ['Bins in master',rows.length],['New bins auto-added',rows.filter(r=>r.nw).length],
+   ['Entries posted',S.log.filter(e=>e.inv===inv&&e.date>=from&&e.date<=to).length]].forEach((r,i)=>{
+    const row=put(ws,5+i,r,[null,NUM],i===4?LIGHT:null);if(i===4)row.eachCell(c=>c.font=font({bold:true}));
+  });
+  ws.getCell('A15').value='Date-wise movement (same date ki entries sum)';ws.getCell('A15').font=font({size:12,bold:true,color:{argb:NAVY}});
+  ws.getRow(16).values=['Date','Opening Stock','Stock In','RTV IN','Stock Out','Closing Stock'];head(ws.getRow(16));
+  dt.forEach((d,i)=>put(ws,17+i,[D(d.date),d.open,d.in,d.rtv,d.out,d.close],[DT,NUM,NUM,NUM,NUM,NUM]).getCell(1).alignment={horizontal:'center'});
+
+  // 2. Stock Summary
+  ws=sheet('Stock Summary',`${inv.toUpperCase()}  -  STOCK SUMMARY`,[18,16,16,34,12,13,12,12,12,14,12],{state:'frozen',xSplit:4,ySplit:4});
+  ws.getRow(4).values=['Brand','SKU','Bin','Final Barcode','Base Stock','Opening Stock','Stock In','RTV IN','Stock Out','Closing Stock','Source'];head(ws.getRow(4));
+  const last=4+rows.length;
+  ws.getCell('D3').value='TOTAL';ws.getCell('D3').font=font({bold:true});ws.getCell('D3').alignment={horizontal:'right'};
+  ['base','open','in','rtv','out','close'].forEach((f,i)=>{const col='EFGHIJ'[i],c=ws.getCell(col+'3');
+    c.value={formula:`SUBTOTAL(109,${col}5:${col}${Math.max(last,5)})`,result:tot(f)};c.numFmt=NUM;c.font=font({bold:true});c.fill=fill(LIGHT);c.border=bd});
+  rows.forEach((r,i)=>put(ws,5+i,[r.brand,r.sku,r.bin,r.sku+' '+r.bin,r.base,r.open,r.in,r.rtv,r.out,r.close,r.nw?'Auto-added':'Master'],[null,null,null,null,NUM,NUM,NUM,NUM,NUM,NUM,null],r.nw?GREEN:null));
+  ws.autoFilter={from:{row:4,column:1},to:{row:Math.max(last,5),column:11}};
+
+  // 3. Daily Format (Sep style)
+  const f=dailyFormat(inv,from,to,all),n=f.aoa.length-2,nc=f.aoa[0].length;
+  ws=wb.addWorksheet('Daily Format',{views:[{state:'frozen',xSplit:4,ySplit:2,showGridLines:false}]});
+  for(let c=1;c<=nc;c++)ws.getColumn(c).width=c===1?18:c===2||c===3?15:c===4?32:11;
+  f.aoa[0].forEach((v,i)=>{ws.getCell(1,i+1).value=ISO.test(v)?D(v):v;if(ISO.test(v))ws.getCell(1,i+1).numFmt=DT});
+  f.aoa[1].forEach((v,i)=>ws.getCell(2,i+1).value=v);
+  for(let c=1;c<=4;c++)ws.mergeCells(1,c,2,c);
+  for(let c=5;c<=nc;c+=5){ws.mergeCells(1,c,1,c+4);}
+  head(ws.getRow(1));ws.getRow(1).height=22;
+  for(let c=5;c<=nc;c++)ws.getCell(1,c).fill=fill(Math.floor((c-5)/5)%2?MID:NAVY);
+  head(ws.getRow(2),LIGHT);ws.getRow(2).eachCell(c=>c.font=font({bold:true,color:{argb:NAVY}}));
+  for(let r=0;r<n;r++){const row=ws.getRow(3+r),src=f.aoa[2+r];
+    src.forEach((v,i)=>{const c=row.getCell(i+1);c.value=v;c.font=font(i>=4&&(i-4)%5===4?{bold:true}:{});c.border=bd;if(i>=4)c.numFmt=NUM})}
+  if(n>0)ws.autoFilter={from:{row:2,column:1},to:{row:2+n,column:4}};
+
+  // 4. Date-wise Ledger
+  const led=ledger(inv,from,to);
+  ws=sheet('Date-wise Ledger',`${inv.toUpperCase()}  -  DATE-WISE LEDGER`,[13,18,16,16,34,13,12,12,12,14],{state:'frozen',xSplit:0,ySplit:4});
+  ws.getRow(4).values=['Date','Brand','SKU','Bin','Final Barcode','Opening Stock','Stock In','RTV IN','Stock Out','Closing Stock'];head(ws.getRow(4));
+  led.forEach((r,i)=>put(ws,5+i,[D(r.date),r.brand,r.sku,r.bin,r.sku+' '+r.bin,r.open,r.in,r.rtv,r.out,r.close],[DT,null,null,null,null,NUM,NUM,NUM,NUM,NUM]));
+  ws.autoFilter={from:{row:4,column:1},to:{row:Math.max(4+led.length,5),column:10}};
+
+  // 5. Entry Log
+  const el=S.log.filter(e=>e.inv===inv&&e.date>=from&&e.date<=to).sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+  ws=sheet('Entry Log',`${inv.toUpperCase()}  -  ENTRY LOG`,[13,12,16,16,34,10,14],{state:'frozen',xSplit:0,ySplit:4});
+  ws.getRow(4).values=['Date','Type','SKU','Bin','Final Barcode','Qty','Bin Check'];head(ws.getRow(4));
+  el.forEach((e,i)=>put(ws,5+i,[D(e.date),e.type,e.sku,e.bin,e.sku+' '+e.bin,e.qty,S.base[inv][key(e.sku,e.bin)]?'OK':'NEW BIN'],[DT,null,null,null,null,'#,##0',null]));
+  ws.autoFilter={from:{row:4,column:1},to:{row:Math.max(4+el.length,5),column:7}};
+  return wb;
+}
+async function exportXlsx(){
+  const b=$('xbtn');b.textContent='Preparing...';
+  try{
+    const inv=$('sel').value,from=$('from').value,to=$('to').value;
+    const buf=await buildWorkbook(inv,from,to,$('dAll').value==='1').xlsx.writeBuffer();
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    a.download=`VC_${inv.split(' ')[0]}_Inventory_${from}_to_${to}.xlsx`;a.click();
+  }catch(e){alert('Export fail: '+e.message)}finally{b.textContent='Export Excel'}
 }
 function resetAll(){if(confirm('Saara base aur log delete hoga. Pehle Export kar lein. Continue?')){S={base:{'DF Inventory':{},'India Inventory':{}},log:[]};save();render()}}
 
 /* ---------- init ---------- */
 const now=new Date().toLocaleDateString('en-CA');
 $('e-date').value=now;$('to').value=now;$('from').value=now.slice(0,8)+'01';
-$('e-inv').innerHTML=INV.map(x=>`<option>${x}</option>`).join('');$('e-type').innerHTML=TYPES.map(x=>`<option>${x}</option>`).join('');
+$('e-inv').innerHTML=INV.map(x=>`<option>${x}</option>`).join('');$('e-inv').value=INV[1];$('e-type').innerHTML=TYPES.map(x=>`<option>${x}</option>`).join('');
+$('sel').innerHTML=INV.map(x=>`<option>${x}</option>`).join('');$('sel').value=INV[1];
+$('e-inv').onchange=()=>$('sel').value=$('e-inv').value;
 $('from').onchange=$('to').onchange=render;
 setTab('entry');cloudLoad();
 </script>
