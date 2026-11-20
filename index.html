@@ -34,6 +34,7 @@ tr.nw td{background:rgba(76,175,80,.14)}tr.neg td.c{color:#c62828;font-weight:bo
   <button onclick="$('file').click()">Import Excel (base)</button>
   <button onclick="exportXlsx()">Export Excel</button>
   <button onclick="resetAll()">Reset</button>
+  <small id="cloud" style="color:#c9d6ee">Local</small>
   <input id="file" type="file" accept=".xlsx,.xls" class="hide">
 </header>
 <nav id="tabs"></nav>
@@ -81,7 +82,34 @@ tr.nw td{background:rgba(76,175,80,.14)}tr.neg td.c{color:#c62828;font-weight:bo
 const INV=['DF Inventory','India Inventory'],TYPES=['Stock In','RTV IN','Stock Out'];
 const $=id=>document.getElementById(id);
 let S=JSON.parse(localStorage.getItem('vc')||'null')||{base:{'DF Inventory':{},'India Inventory':{}},log:[]};
-const save=()=>{try{localStorage.setItem('vc',JSON.stringify(S))}catch(e){alert('Browser storage full. Export Excel karke backup lein.')}};
+let saveT;
+const save=()=>{try{localStorage.setItem('vc',JSON.stringify(S))}catch(e){}clearTimeout(saveT);saveT=setTimeout(cloudSave,1500)};
+/* ---------- Upstash sync (via /api/state) ---------- */
+const API='/api/state',hdr=()=>({'x-app-key':localStorage.getItem('vckey')||''});
+const setCloud=t=>{$('cloud').textContent=t};
+async function cloudSave(){
+  try{
+    const s=JSON.stringify(S),parts=[];for(let i=0;i<s.length;i+=400000)parts.push(s.slice(i,i+400000));
+    setCloud('Saving...');
+    for(let i=0;i<parts.length;i++){
+      const r=await fetch(`${API}?i=${i}&n=${parts.length}`,{method:'POST',headers:{...hdr(),'Content-Type':'text/plain'},body:parts[i]});
+      if(!r.ok)throw new Error(r.status);
+    }
+    setCloud('Cloud synced');
+  }catch(e){setCloud('Local only (cloud save fail)')}
+}
+async function cloudLoad(){
+  try{
+    let r=await fetch(API+'?i=0',{headers:hdr()});
+    if(r.status===401){const k=prompt('App password:');if(!k)return setCloud('Locked');localStorage.setItem('vckey',k);return cloudLoad()}
+    if(!r.ok)throw new Error(r.status);
+    const j=await r.json();
+    if(!j.n){setCloud('Cloud empty');if(S.log.length||Object.keys(S.base['India Inventory']).length)cloudSave();return}
+    let s=j.chunk;
+    for(let i=1;i<j.n;i++)s+=(await(await fetch(API+'?i='+i,{headers:hdr()})).json()).chunk;
+    S=JSON.parse(s);localStorage.setItem('vc',s);setCloud('Cloud synced');render();
+  }catch(e){setCloud('Local only')}
+}
 const key=(s,b)=>(String(s).trim()+' '+String(b).trim()).toUpperCase();
 const fmt=n=>Number(n).toLocaleString('en-IN');
 const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -260,7 +288,7 @@ const now=new Date().toLocaleDateString('en-CA');
 $('e-date').value=now;$('to').value=now;$('from').value=now.slice(0,8)+'01';
 $('e-inv').innerHTML=INV.map(x=>`<option>${x}</option>`).join('');$('e-type').innerHTML=TYPES.map(x=>`<option>${x}</option>`).join('');
 $('from').onchange=$('to').onchange=render;
-setTab('entry');
+setTab('entry');cloudLoad();
 </script>
 </body>
 </html>
