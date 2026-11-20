@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VC Inventory</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--navy:#1f3864;--bg:#f4f6fa;--card:#fff;--line:#d9dee8;--txt:#1b1f27;--mut:#5f6b7a}
+@media(prefers-color-scheme:dark){:root{--bg:#14181f;--card:#1d232d;--line:#333c4a;--txt:#e8ecf2;--mut:#9aa6b6}}
+*{box-sizing:border-box}body{margin:0;font:13px Arial,sans-serif;background:var(--bg);color:var(--txt)}
+header{background:var(--navy);color:#fff;padding:12px 20px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+header h1{font-size:17px;margin:0;flex:1}
+nav{display:flex;gap:4px;padding:10px 20px 0}
+nav button{border:0;background:none;padding:8px 14px;cursor:pointer;color:var(--mut);font:inherit;border-bottom:2px solid transparent}
+nav button.on{color:var(--navy);border-color:var(--navy);font-weight:bold}
+@media(prefers-color-scheme:dark){nav button.on{color:#8db4ff;border-color:#8db4ff}}
+main{padding:14px 20px}.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}label{display:flex;flex-direction:column;gap:3px;color:var(--mut);font-size:11px}
+input,select,textarea,button{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:5px;background:var(--card);color:var(--txt)}
+button.p{background:var(--navy);color:#fff;border-color:var(--navy);cursor:pointer}header button{background:#fff;color:var(--navy);cursor:pointer}
+.msg{margin-top:8px;font-weight:bold}.ok{color:#2e7d32}.new{color:#b26a00}.bad{color:#c62828}
+.tw{overflow:auto;max-height:62vh}table{border-collapse:collapse;width:100%}
+th{background:var(--navy);color:#fff;position:sticky;top:0;padding:7px;text-align:left;white-space:nowrap}
+td{padding:5px 7px;border-bottom:1px solid var(--line);white-space:nowrap}td.n,th.n{text-align:right}
+tr.nw td{background:rgba(76,175,80,.14)}tr.neg td.c{color:#c62828;font-weight:bold}tfoot td{font-weight:bold;background:rgba(31,56,100,.12)}
+.kpi{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}.kpi div{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 16px;min-width:120px}
+.kpi b{display:block;font-size:19px;margin-top:3px}.hide{display:none}small{color:var(--mut)}
+</style>
+</head>
+<body>
+<header>
+  <h1>VC INVENTORY &nbsp;<small style="color:#c9d6ee">DF + India | Stock In / RTV IN / Stock Out</small></h1>
+  <button onclick="$('file').click()">Import Excel (base)</button>
+  <button onclick="exportXlsx()">Export Excel</button>
+  <button onclick="resetAll()">Reset</button>
+  <input id="file" type="file" accept=".xlsx,.xls" class="hide">
+</header>
+<nav id="tabs"></nav>
+<main>
+  <div class="card row">
+    <label>From Date<input type="date" id="from"></label>
+    <label>To Date<input type="date" id="to"></label>
+    <small>Period Opening/Closing ke liye. Dono inventory aur Daily tab isi se chalte hain.</small>
+  </div>
+
+  <section id="t-entry">
+    <div class="card">
+      <div class="row">
+        <label>Date<input type="date" id="e-date"></label>
+        <label>Inventory<select id="e-inv"></select></label>
+        <label>Type<select id="e-type"></select></label>
+        <label>SKU<input id="e-sku"></label>
+        <label>Bin<input id="e-bin"></label>
+        <label>Qty<input id="e-qty" type="number" min="1" style="width:80px"></label>
+        <button class="p" onclick="addOne()">Add Entry</button>
+      </div>
+      <div id="e-msg" class="msg"></div>
+    </div>
+    <div class="card">
+      <b>Excel upload (IN / OUT)</b> <small>Columns: SKU, Bin, Qty (optional: Date, Inventory, Type). Jo columns na hon unke liye upar ki Date/Inventory/Type lagegi. Duplicate rows (same date + inventory + type + barcode) automatically sum hoke unique ho jati hain.</small>
+      <div class="row" style="margin-top:8px"><button class="p" onclick="$('efile').click()">Upload Excel</button><button onclick="template()">Download Template</button></div>
+      <input id="efile" type="file" accept=".xlsx,.xls,.csv" class="hide">
+      <div id="u-msg" class="msg"></div>
+    </div>
+    <div class="card">
+      <b>Bulk paste</b> <small>(Excel se SKU, Bin, Qty copy karke paste karein; upar wali Date/Inventory/Type lagegi)</small>
+      <div class="row" style="margin-top:8px"><textarea id="bulk" rows="4" style="flex:1;min-width:260px" placeholder="207ES00072&#9;IN-1FB-B1A1&#9;10"></textarea>
+      <button class="p" onclick="addBulk()">Add All</button></div>
+      <div id="b-msg" class="msg"></div>
+    </div>
+    <div class="card"><b>Entry Log</b> <small>(latest 200)</small><div class="tw" id="log"></div></div>
+  </section>
+
+  <section id="t-df" class="hide"></section>
+  <section id="t-in" class="hide"></section>
+  <section id="t-daily" class="hide"></section>
+</main>
+
+<script>
+const INV=['DF Inventory','India Inventory'],TYPES=['Stock In','RTV IN','Stock Out'];
+const $=id=>document.getElementById(id);
+let S=JSON.parse(localStorage.getItem('vc')||'null')||{base:{'DF Inventory':{},'India Inventory':{}},log:[]};
+const save=()=>{try{localStorage.setItem('vc',JSON.stringify(S))}catch(e){alert('Browser storage full. Export Excel karke backup lein.')}};
+const key=(s,b)=>(String(s).trim()+' '+String(b).trim()).toUpperCase();
+const fmt=n=>Number(n).toLocaleString('en-IN');
+const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let tab='entry',q={};
+
+/* ---------- core calc ---------- */
+function skuBrand(){const m={};for(const r of Object.values(S.base['India Inventory']))m[r.sku.toUpperCase()]=r.brand;return m}
+function compute(inv,from,to){
+  const rows={},sb=skuBrand();
+  for(const [k,r] of Object.entries(S.base[inv]))rows[k]={brand:r.brand,sku:r.sku,bin:r.bin,base:r.qty,open:r.qty,in:0,rtv:0,out:0,nw:false};
+  for(const e of S.log){
+    if(e.inv!==inv)continue;const k=key(e.sku,e.bin);
+    const r=rows[k]||(rows[k]={brand:sb[String(e.sku).trim().toUpperCase()]||'Unmapped SKU',sku:e.sku.trim(),bin:e.bin.trim(),base:0,open:0,in:0,rtv:0,out:0,nw:true});
+    const sign=e.type==='Stock Out'?-1:1;
+    if(e.date<from)r.open+=sign*e.qty;
+    else if(e.date<=to){if(e.type==='Stock In')r.in+=e.qty;else if(e.type==='RTV IN')r.rtv+=e.qty;else r.out+=e.qty}
+  }
+  for(const r of Object.values(rows))r.close=r.open+r.in+r.rtv-r.out;
+  return Object.values(rows);
+}
+const sum=(rows,f)=>rows.reduce((a,r)=>a+r[f],0);
+
+/* ---------- entries ---------- */
+function status(inv,sku,bin){
+  const k=key(sku,bin);if(S.base[inv][k])return'ok';
+  return S.log.some(e=>e.inv===inv&&key(e.sku,e.bin)===k)?'new2':'new';
+}
+const MSG={ok:['ok','OK - Bin matched'],new:['new','NEW BIN - master mein add ho gaya, phir stock post hua'],new2:['new','OK - Bin pehle auto-add ho chuka hai']};
+function push(inv,type,date,sku,bin,qty){
+  sku=String(sku).trim();bin=String(bin).trim();qty=Number(qty);
+  if(!date||!sku||!bin||!(qty>0)||!Number.isInteger(qty))return null;
+  const st=status(inv,sku,bin),k=key(sku,bin);
+  const ex=S.log.find(e=>e.date===date&&e.inv===inv&&e.type===type&&key(e.sku,e.bin)===k);
+  if(ex){ex.qty+=qty;push.merged++}else S.log.push({id:Date.now()+Math.random(),date,inv,type,sku,bin,qty});
+  return st;
+}
+push.merged=0;
+/* ---------- Excel upload (IN / OUT) ---------- */
+const normType=v=>{v=String(v).trim().toLowerCase();return /rtv/.test(v)?'RTV IN':/out/.test(v)?'Stock Out':/in/.test(v)?'Stock In':null};
+const normInv=v=>{v=String(v).trim().toLowerCase();return !v?null:/df/.test(v)?'DF Inventory':'India Inventory'};
+function normDate(v){
+  if(v===''||v==null)return null;
+  if(typeof v==='number')return new Date(Math.round((v-25569)*864e5)).toISOString().slice(0,10);
+  v=String(v).trim();let m=v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(m)return`${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  m=v.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})/);
+  return m?`${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`:null;
+}
+$('efile').onchange=async ev=>{
+  const f=ev.target.files[0];if(!f)return;
+  const wb=XLSX.read(await f.arrayBuffer()),a=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''});
+  const hi=a.findIndex((r,i)=>i<20&&r.map(x=>String(x).trim().toLowerCase()).includes('sku'));
+  const m=$('u-msg');
+  if(hi<0){m.className='msg bad';m.textContent='SKU, Bin, Qty headers wali row nahi mili';return}
+  const h=a[hi].map(x=>String(x).trim().toLowerCase()),ix=n=>h.indexOf(n);
+  const iS=ix('sku'),iB=ix('bin'),iQ=ix('qty'),iD=ix('date'),iI=ix('inventory'),iT=ix('type');
+  if(iB<0||iQ<0){m.className='msg bad';m.textContent='Bin aur Qty columns zaroori hain';return}
+  let rows=0,ok=0,bad=0,nw=0;push.merged=0;
+  for(const r of a.slice(hi+1)){
+    if(r.every(x=>x===''))continue;rows++;
+    const date=iD>=0&&r[iD]!==''?normDate(r[iD]):$('e-date').value,
+          inv=iI>=0&&r[iI]!==''?normInv(r[iI]):$('e-inv').value,
+          type=iT>=0&&r[iT]!==''?normType(r[iT]):$('e-type').value;
+    const st=date&&inv&&type?push(inv,type,date,r[iS],r[iB],r[iQ]):null;
+    st?(ok++,st==='new'&&nw++):bad++;
+  }
+  m.className='msg '+(bad?'bad':'ok');
+  m.textContent=`${rows} rows padhi: ${ok} post hui (${push.merged} duplicate rows merge/sum hui, ${nw} new bins auto-added), ${bad} galat/incomplete`;
+  save();render();ev.target.value='';
+};
+function template(){
+  const ws=XLSX.utils.aoa_to_sheet([['Date','Inventory','Type','SKU','Bin','Qty'],['2026-11-20','India Inventory','Stock In','207ES00072','IN-1FB-B1A1',10]]),wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Entries');XLSX.writeFile(wb,'VC_InOut_Template.xlsx');
+}
+function addOne(){
+  const st=push($('e-inv').value,$('e-type').value,$('e-date').value,$('e-sku').value,$('e-bin').value,$('e-qty').value);
+  const m=$('e-msg');
+  if(!st){m.className='msg bad';m.textContent='ERROR - Date, SKU, Bin aur Qty (whole number > 0) zaroori hai';return}
+  let [c,t]=MSG[st];if(st==='new'&&$('e-type').value==='Stock Out'){c='bad';t='WARNING - Stock Out new bin par (negative stock)'}
+  m.className='msg '+c;m.textContent=t+'  |  '+key($('e-sku').value,$('e-bin').value);
+  save();['e-sku','e-bin','e-qty'].forEach(i=>$(i).value='');$('e-sku').focus();render();
+}
+function addBulk(){
+  let ok=0,bad=0,nw=0;push.merged=0;
+  for(const ln of $('bulk').value.split('\n')){
+    if(!ln.trim())continue;const p=ln.trim().split(/[\t, ]+/);
+    const st=p.length>=3?push($('e-inv').value,$('e-type').value,$('e-date').value,p[0],p[1],p[2]):null;
+    st?(ok++,st==='new'&&nw++):bad++;
+  }
+  $('b-msg').className='msg '+(bad?'bad':'ok');
+  $('b-msg').textContent=`${ok} entries add hui (${push.merged} duplicate merge, ${nw} new bins auto-added), ${bad} rows galat/incomplete`;
+  if(ok){save();$('bulk').value='';render()}
+}
+function del(id){S.log=S.log.filter(e=>e.id!==id);save();render()}
+
+/* ---------- render ---------- */
+function invTable(inv,id){
+  const from=$('from').value,to=$('to').value,rows=compute(inv,from,to),s=(q[id]||'').toLowerCase();
+  const view=rows.filter(r=>!s||(r.sku+' '+r.bin+' '+r.brand).toLowerCase().includes(s)).sort((a,b)=>b.nw-a.nw);
+  const shown=view.slice(0,300);
+  $(id).innerHTML=`<div class="kpi">${[['Bins',rows.length],['Opening',sum(rows,'open')],['Stock In',sum(rows,'in')],['RTV IN',sum(rows,'rtv')],['Stock Out',sum(rows,'out')],['Closing',sum(rows,'close')]].map(([a,b])=>`<div>${a}<b>${fmt(b)}</b></div>`).join('')}</div>
+  <div class="card"><div class="row"><label>Search SKU / Bin / Brand<input value="${esc(q[id]||'')}" oninput="q['${id}']=this.value;invTable('${inv}','${id}')" id="s-${id}"></label>
+  <small>${fmt(view.length)} bins${view.length>300?' (pehle 300 dikh rahe, search karein)':''}. Green = auto-added bin.</small></div>
+  <div class="tw" style="margin-top:10px"><table><thead><tr><th>Brand</th><th>SKU</th><th>Bin</th><th>Final Barcode</th><th class="n">Base</th><th class="n">Opening</th><th class="n">Stock In</th><th class="n">RTV IN</th><th class="n">Stock Out</th><th class="n">Closing</th></tr></thead><tbody>
+  ${shown.map(r=>`<tr class="${r.nw?'nw':''} ${r.close<0?'neg':''}"><td>${esc(r.brand)}</td><td>${esc(r.sku)}</td><td>${esc(r.bin)}</td><td>${esc(r.sku+' '+r.bin)}</td><td class="n">${fmt(r.base)}</td><td class="n">${fmt(r.open)}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.rtv)}</td><td class="n">${fmt(r.out)}</td><td class="n c">${fmt(r.close)}</td></tr>`).join('')}
+  </tbody></table></div></div>`;
+  const i=$('s-'+id);if(i&&document.activeElement===document.body&&s){i.focus();i.setSelectionRange(s.length,s.length)}
+}
+function daily(){
+  const from=$('from').value,to=$('to').value;let h='';
+  for(const inv of INV){
+    const base=Object.values(S.base[inv]).reduce((a,r)=>a+r.qty,0),L=S.log.filter(e=>e.inv===inv);
+    let open=base+L.filter(e=>e.date<from).reduce((a,e)=>a+(e.type==='Stock Out'?-e.qty:e.qty),0);
+    let body='',d=new Date(from+'T00:00:00'),end=new Date(to+'T00:00:00'),n=0;
+    for(;d<=end&&n<62;d.setDate(d.getDate()+1),n++){
+      const ds=d.toLocaleDateString('en-CA'),x=L.filter(e=>e.date===ds),f=t=>x.filter(e=>e.type===t).reduce((a,e)=>a+e.qty,0);
+      const i=f('Stock In'),r=f('RTV IN'),o=f('Stock Out'),c=open+i+r-o;
+      body+=`<tr><td>${ds}</td><td class="n">${fmt(open)}</td><td class="n">${fmt(i)}</td><td class="n">${fmt(r)}</td><td class="n">${fmt(o)}</td><td class="n"><b>${fmt(c)}</b></td></tr>`;open=c;
+    }
+    h+=`<div class="card"><b>${inv}</b> <small>(same date ki entries sum hoti hain)</small><div class="tw"><table><thead><tr><th>Date</th><th class="n">Opening</th><th class="n">Stock In</th><th class="n">RTV IN</th><th class="n">Stock Out</th><th class="n">Closing</th></tr></thead><tbody>${body}</tbody></table></div></div>`;
+  }
+  $('t-daily').innerHTML=h;
+}
+function logTable(){
+  const rows=S.log.slice(-200).reverse();
+  $('log').innerHTML=`<table><thead><tr><th>Date</th><th>Inventory</th><th>Type</th><th>Final Barcode</th><th class="n">Qty</th><th>Bin Check</th><th></th></tr></thead><tbody>${rows.map(e=>{
+    const k=key(e.sku,e.bin),inBase=!!S.base[e.inv][k];
+    return`<tr><td>${e.date}</td><td>${e.inv}</td><td>${e.type}</td><td>${esc(e.sku+' '+e.bin)}</td><td class="n">${fmt(e.qty)}</td><td class="${inBase?'ok':'new'}">${inBase?'OK':'NEW BIN'}</td><td><button onclick="del(${e.id})">x</button></td></tr>`}).join('')}</tbody></table>`;
+}
+function render(){
+  if(tab==='entry')logTable();
+  if(tab==='df')invTable('DF Inventory','t-df');
+  if(tab==='in')invTable('India Inventory','t-in');
+  if(tab==='daily')daily();
+}
+function setTab(t){
+  tab=t;for(const [k] of TABS)$('t-'+k).classList.toggle('hide',k!==t);
+  [...$('tabs').children].forEach((b,i)=>b.classList.toggle('on',TABS[i][0]===t));render();
+}
+const TABS=[['entry','Entry'],['df','DF Inventory'],['in','India Inventory'],['daily','Daily Summary']];
+$('tabs').innerHTML=TABS.map(([k,l])=>`<button onclick="setTab('${k}')">${l}</button>`).join('');
+
+/* ---------- import / export ---------- */
+$('file').onchange=async ev=>{
+  const f=ev.target.files[0];if(!f)return;
+  const wb=XLSX.read(await f.arrayBuffer());let got=[];
+  for(const inv of INV){
+    const ws=wb.Sheets[inv];if(!ws)continue;
+    const a=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+    const hi=a.findIndex((r,i)=>i<20&&r.map(x=>String(x).trim().toLowerCase()).includes('sku')&&r.map(x=>String(x).trim().toLowerCase()).includes('bin'));
+    if(hi<0)continue;
+    const h=a[hi].map(x=>String(x).trim().toLowerCase()),ix=n=>h.indexOf(n);
+    const qi=[ix('closing stock'),ix('base stock'),ix('qty')].find(i=>i>=0);
+    const base={};
+    for(const r of a.slice(hi+1)){
+      const sku=String(r[ix('sku')]).trim(),bin=String(r[ix('bin')]).trim();if(!sku||!bin)continue;
+      const k=key(sku,bin),qty=Number(r[qi])||0;
+      if(base[k])base[k].qty+=qty;else base[k]={brand:ix('brand')>=0?String(r[ix('brand')]):'',sku,bin,qty};
+    }
+    S.base[inv]=base;got.push(`${inv}: ${fmt(Object.keys(base).length)} bins`);
+  }
+  if(!got.length){alert('DF Inventory / India Inventory sheet (SKU, Bin columns ke saath) nahi mili.');return}
+  if(confirm(got.join('\n')+'\n\nEntry log bhi clear karein? (naye mahine ke liye OK dabayein)'))S.log=[];
+  save();render();ev.target.value='';
+};
+function exportXlsx(){
+  const wb=XLSX.utils.book_new(),from=$('from').value,to=$('to').value;
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(S.log.map(e=>({Date:e.date,Inventory:e.inv,Type:e.type,SKU:e.sku,Bin:e.bin,Qty:e.qty,'Final Barcode':e.sku+' '+e.bin}))),'Entry');
+  for(const inv of INV)XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(compute(inv,from,to).map(r=>({Brand:r.brand,SKU:r.sku,Bin:r.bin,'Final Barcode':r.sku+' '+r.bin,'Base Stock':r.base,'Opening Stock':r.open,'Stock In':r.in,'RTV IN':r.rtv,'Stock Out':r.out,'Closing Stock':r.close,Source:r.nw?'Auto-added':'Master'}))),inv);
+  XLSX.writeFile(wb,`VC_Inventory_${to}.xlsx`);
+}
+function resetAll(){if(confirm('Saara base aur log delete hoga. Pehle Export kar lein. Continue?')){S={base:{'DF Inventory':{},'India Inventory':{}},log:[]};save();render()}}
+
+/* ---------- init ---------- */
+const now=new Date().toLocaleDateString('en-CA');
+$('e-date').value=now;$('to').value=now;$('from').value=now.slice(0,8)+'01';
+$('e-inv').innerHTML=INV.map(x=>`<option>${x}</option>`).join('');$('e-type').innerHTML=TYPES.map(x=>`<option>${x}</option>`).join('');
+$('from').onchange=$('to').onchange=render;
+setTab('entry');
+</script>
+</body>
+</html>
