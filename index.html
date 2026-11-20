@@ -59,6 +59,12 @@ tr.nw td{background:rgba(76,175,80,.14)}tr.neg td.c{color:#c62828;font-weight:bo
       <div id="e-msg" class="msg"></div>
     </div>
     <div class="card">
+      <b>Stock Import (Current Inventory)</b> <small>Columns: SKU, Bin, Final Barcode, Closing Qty (optional: Brand). Ye file us inventory ka base stock replace karti hai. Duplicate barcodes sum hoke unique ho jate hain. Entry log safe rehta hai.</small>
+      <div class="row" style="margin-top:8px"><button class="p" onclick="pickBase('India Inventory')">Upload India Inventory</button><button class="p" onclick="pickBase('DF Inventory')">Upload DF Inventory</button><button onclick="baseTemplate()">Download Template</button></div>
+      <input id="bfile" type="file" accept=".xlsx,.xls,.csv" class="hide">
+      <div id="i-msg" class="msg"></div>
+    </div>
+    <div class="card">
       <b>Excel upload (IN / OUT)</b> <small>Columns: SKU, Bin, Qty (optional: Date, Inventory, Type). Jo columns na hon unke liye upar ki Date/Inventory/Type lagegi. Duplicate rows (same date + inventory + type + barcode) automatically sum hoke unique ho jati hain.</small>
       <div class="row" style="margin-top:8px"><button class="p" onclick="$('efile').click()">Upload Excel</button><button onclick="template()">Download Template</button></div>
       <input id="efile" type="file" accept=".xlsx,.xls,.csv" class="hide">
@@ -179,6 +185,44 @@ $('efile').onchange=async ev=>{
   m.className='msg '+(bad?'bad':'ok');
   m.textContent=`${rows} rows padhi: ${ok} post hui (${push.merged} duplicate rows merge/sum hui, ${nw} new bins auto-added), ${bad} galat/incomplete`;
   save();render();ev.target.value='';
+};
+/* ---------- Base stock import (per inventory) ---------- */
+let baseInv=null;
+const pickBase=inv=>{baseInv=inv;$('bfile').click()};
+function baseTemplate(){
+  const ws=XLSX.utils.aoa_to_sheet([['Brand','SKU','Bin','Final Barcode','Closing Qty'],['7Essensial','207ES00072','IN-1FB-B1A1','207ES00072 IN-1FB-B1A1',3]]),wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Inventory(Detailed)');XLSX.writeFile(wb,'VC_Inventory_Detailed_Template.xlsx');
+}
+$('bfile').onchange=async ev=>{
+  const f=ev.target.files[0],inv=baseInv,m=$('i-msg');if(!f||!inv)return;
+  const wb=XLSX.read(await f.arrayBuffer());let a=null,hi=-1;
+  const low=r=>r.map(x=>String(x).trim().toLowerCase());
+  for(const n of wb.SheetNames){
+    const t=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:''}),i=t.findIndex((r,j)=>j<20&&low(r).includes('sku')&&low(r).includes('bin'));
+    if(i>=0){a=t;hi=i;break}
+  }
+  if(!a){m.className='msg bad';m.textContent='SKU aur Bin headers wali sheet nahi mili';ev.target.value='';return}
+  const h=low(a[hi]),ix=n=>h.indexOf(n);
+  const qi=['closing qty','closing stock','closing balance','closing','qty','quantity','base stock'].map(ix).find(i=>i>=0);
+  if(qi===undefined){m.className='msg bad';m.textContent='Closing Qty column nahi mila';ev.target.value='';return}
+  const old=S.base[inv],sb=skuBrand(),base={};let rows=0,bad=0,dup=0;
+  for(const r of a.slice(hi+1)){
+    if(r.every(x=>x===''))continue;rows++;
+    const sku=String(r[ix('sku')]).trim(),bin=String(r[ix('bin')]).trim(),qty=Number(r[qi]);
+    if(!sku||!bin||isNaN(qty)){bad++;continue}
+    const k=key(sku,bin);
+    if(base[k]){base[k].qty+=qty;dup++}
+    else{
+      let brand=ix('brand')>=0?String(r[ix('brand')]).trim():'';
+      brand=brand||(old[k]&&old[k].brand)||sb[sku.toUpperCase()]||'';
+      base[k]={brand,sku,bin,qty};
+    }
+  }
+  const n=Object.keys(base).length,tot=Object.values(base).reduce((x,r)=>x+r.qty,0);
+  if(!confirm(`${inv}: ${fmt(n)} unique bins, total closing ${fmt(tot)}.\nPurana ${inv} base replace hoga. Continue?`)){ev.target.value='';return}
+  S.base[inv]=base;save();render();ev.target.value='';
+  m.className='msg '+(bad?'bad':'ok');
+  m.textContent=`${inv} import ho gaya: ${rows} rows -> ${fmt(n)} unique bins (${dup} duplicate merge), total ${fmt(tot)}, ${bad} galat rows skip`;
 };
 function template(){
   const ws=XLSX.utils.aoa_to_sheet([['Date','Inventory','Type','SKU','Bin','Qty'],['2026-11-20','India Inventory','Stock In','207ES00072','IN-1FB-B1A1',10]]),wb=XLSX.utils.book_new();
